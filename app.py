@@ -1,3 +1,5 @@
+import os
+import json
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
@@ -8,24 +10,28 @@ import pandas as pd
 # ---------------------------
 # Configuración Global
 # ---------------------------
-# Se asume que el archivo se llama reportes-449714-c7be19d8e9d5.json y está en la raíz del proyecto
-SERVICE_ACCOUNT_FILE = "reportes-449714-c7be19d8e9d5.json"
+# Ya no usaremos el archivo local, sino que leeremos las credenciales desde la variable de entorno.
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
+def load_credentials():
+    google_creds = os.getenv("GOOGLE_CREDENTIALS")
+    if google_creds:
+        creds_info = json.loads(google_creds)
+        return Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+    else:
+        raise Exception("No se encontró la variable de entorno GOOGLE_CREDENTIALS")
+
 # URLs de los spreadsheets
-URL_LOG = "https://docs.google.com/spreadsheets/d/1mMQMXNsiZOXNVVtjzI7ERZPd6sjGhvfIDPU1i5eKm-c/edit?gid=1371253785"
-URL_LISTADO_PERSONAL = "https://docs.google.com/spreadsheets/d/1ndFNkOAGysRB-aTI930Rs31yjDy_2GnUpSNO9CEKt5Y/edit?gid=1937104554"
-URL_DOC_ENTREGADOS = "https://docs.google.com/spreadsheets/d/1w0OfsVR00UbBiNALVLbjEvc7wD_tpvj3BUBduTU8cnA/edit?gid=366220896"
+URL_LOG = "https://docs.google.com/spreadsheets/d/1mMQMXNsiZOXNVVtjzI7ERZPd6sjGhvfIDPU1i5eKm-c/edit?gid=1371253785"  # LOG Documentos y planos_Rev. B
+URL_LISTADO_PERSONAL = "https://docs.google.com/spreadsheets/d/1ndFNkOAGysRB-aTI930Rs31yjDy_2GnUpSNO9CEKt5Y/edit?gid=1937104554"  # Listado de Personal
+URL_DOC_ENTREGADOS = "https://docs.google.com/spreadsheets/d/1w0OfsVR00UbBiNALVLbjEvc7wD_tpvj3BUBduTU8cnA/edit?gid=366220896"  # DOC. ENTREGADOS
 
 CONTRATO = "ALIMENTACIÓN Y PREPARACIÓN CENIZA DE SODA PREPARE N° 4 Y N° 5"
 ENTREGADO_POR = "MARÍA REYES"
 
 # ---------------------------
-# Funciones Básicas
+# Funciones Básicas (sin cambios importantes)
 # ---------------------------
-def load_credentials():
-    return Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-
 def connect_spreadsheets(credentials):
     gc = gspread.authorize(credentials)
     sheet_log = gc.open_by_url(URL_LOG)
@@ -139,7 +145,7 @@ def main():
     st.set_page_config(page_title="Ingreso de Documentos", layout="centered")
     st.title("Ingreso Masivo de Documentos")
 
-    # Usamos session_state para almacenar los códigos agregados
+    # Usar session_state para almacenar los códigos agregados
     if "documento_codes" not in st.session_state:
         st.session_state["documento_codes"] = []
 
@@ -161,7 +167,6 @@ def main():
     st.header("Seleccionar Trabajador")
     modo_busqueda = st.radio("Buscar por:", ["CC CORRELATIVO ASIGNADO", "Nombre"], index=0)
     trabajador = None
-
     if modo_busqueda == "CC CORRELATIVO ASIGNADO":
         cc_input = st.text_input("Ingresa el CC:")
         if cc_input:
@@ -189,9 +194,9 @@ def main():
             else:
                 st.warning("No se encontraron coincidencias.")
 
-    # Panel para agregar códigos (Ingreso Manual o Filtrado)
+    # Panel para agregar códigos: Ingreso Manual o Filtrado
     st.header("Agregar Documentos")
-    st.info("Puedes ingresar códigos manualmente o filtrar por ECO y DISCIPLINA, luego presionar 'Agregar'.")
+    st.info("Puedes ingresar códigos manualmente o filtrar por ECO y DISCIPLINA, luego presiona 'Agregar'.")
     tab_manual, tab_filtro = st.tabs(["Ingreso Manual", "Filtrar por ECO y DISCIPLINA"])
 
     with tab_manual:
@@ -227,24 +232,22 @@ def main():
                 data_rows = all_vals[16:]
                 df = pd.DataFrame(data_rows, columns=header)
 
-                # Asegurar que existan las columnas clave
                 for col in ["ECO", "DISCIPLINA", "N° ENTREGABLE SQM"]:
                     if col not in df.columns:
                         st.error(f"Falta la columna {col} en la hoja LOG.")
                         return
 
-                # Normalizar para evitar duplicados por espacios y mayúsculas
+                # Normalizar para evitar duplicados
                 df["ECO"] = df["ECO"].str.strip().str.upper()
                 df["DISCIPLINA"] = df["DISCIPLINA"].str.strip().str.upper()
 
-                # Selección de ECO
+                # Filtrar por ECO y luego por DISCIPLINA (cruzado)
                 ecos_disponibles = sorted(df["ECO"].unique())
                 selected_eco = st.multiselect("Seleccione ECO:", ecos_disponibles)
                 df_filtrado = df.copy()
                 if selected_eco:
                     df_filtrado = df_filtrado[df_filtrado["ECO"].isin(selected_eco)]
 
-                # Filtrar DISCIPLINA basada en el ECO seleccionado
                 disciplinas_disponibles = sorted(df_filtrado["DISCIPLINA"].unique())
                 selected_disc = st.multiselect("Seleccione DISCIPLINA:", disciplinas_disponibles)
                 if selected_disc:
@@ -299,6 +302,7 @@ def main():
                 rev = plano_data.get("rev", "")
             else:
                 eco = tipo_doc = descripcion = disciplina = rev = ""
+
             item_value, new_row = get_item_and_next_row(ws_doc_entregados, start_row=29)
             cc_val = str(trabajador.get("CC CORRELATIVO ASIGNADO", "")).strip()
 
