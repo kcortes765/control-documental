@@ -10,16 +10,19 @@ import pandas as pd
 # ---------------------------
 # Configuración Global
 # ---------------------------
-# Ya no usaremos el archivo local, sino que leeremos las credenciales desde la variable de entorno.
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 def load_credentials():
+    # Carga las credenciales desde la variable de entorno GOOGLE_CREDENTIALS
     google_creds = os.getenv("GOOGLE_CREDENTIALS")
-    if google_creds:
-        creds_info = json.loads(google_creds)
-        return Credentials.from_service_account_info(creds_info, scopes=SCOPES)
-    else:
+    if not google_creds:
         raise Exception("No se encontró la variable de entorno GOOGLE_CREDENTIALS")
+    creds_info = json.loads(google_creds)
+    if "private_key" in creds_info:
+        # Reemplaza CRLF por LF y convierte la clave a bytes
+        key = creds_info["private_key"].replace("\r\n", "\n")
+        creds_info["private_key"] = key.encode("utf-8")
+    return Credentials.from_service_account_info(creds_info, scopes=SCOPES)
 
 # URLs de los spreadsheets
 URL_LOG = "https://docs.google.com/spreadsheets/d/1mMQMXNsiZOXNVVtjzI7ERZPd6sjGhvfIDPU1i5eKm-c/edit?gid=1371253785"  # LOG Documentos y planos_Rev. B
@@ -30,7 +33,7 @@ CONTRATO = "ALIMENTACIÓN Y PREPARACIÓN CENIZA DE SODA PREPARE N° 4 Y N° 5"
 ENTREGADO_POR = "MARÍA REYES"
 
 # ---------------------------
-# Funciones Básicas (sin cambios importantes)
+# Funciones Básicas
 # ---------------------------
 def connect_spreadsheets(credentials):
     gc = gspread.authorize(credentials)
@@ -145,7 +148,7 @@ def main():
     st.set_page_config(page_title="Ingreso de Documentos", layout="centered")
     st.title("Ingreso Masivo de Documentos")
 
-    # Usar session_state para almacenar los códigos agregados
+    # Usamos session_state para almacenar los códigos agregados
     if "documento_codes" not in st.session_state:
         st.session_state["documento_codes"] = []
 
@@ -157,7 +160,6 @@ def main():
         st.error(f"Error conectando con las hojas: {e}")
         return
 
-    # Cargar datos de trabajadores
     try:
         trabajadores_by_id, trabajadores_names, trabajadores_data = get_trabajadores_data(sheet_listado)
     except Exception as e:
@@ -194,9 +196,8 @@ def main():
             else:
                 st.warning("No se encontraron coincidencias.")
 
-    # Panel para agregar códigos: Ingreso Manual o Filtrado
     st.header("Agregar Documentos")
-    st.info("Puedes ingresar códigos manualmente o filtrar por ECO y DISCIPLINA, luego presiona 'Agregar'.")
+    st.info("Puedes ingresar códigos manualmente o filtrar por ECO y DISCIPLINA, luego presionar 'Agregar'.")
     tab_manual, tab_filtro = st.tabs(["Ingreso Manual", "Filtrar por ECO y DISCIPLINA"])
 
     with tab_manual:
@@ -231,31 +232,25 @@ def main():
                 header = deduplicate_header(header)
                 data_rows = all_vals[16:]
                 df = pd.DataFrame(data_rows, columns=header)
-
                 for col in ["ECO", "DISCIPLINA", "N° ENTREGABLE SQM"]:
                     if col not in df.columns:
                         st.error(f"Falta la columna {col} en la hoja LOG.")
                         return
-
-                # Normalizar para evitar duplicados
+                # Normalizar ECO y DISCIPLINA
                 df["ECO"] = df["ECO"].str.strip().str.upper()
                 df["DISCIPLINA"] = df["DISCIPLINA"].str.strip().str.upper()
-
-                # Filtrar por ECO y luego por DISCIPLINA (cruzado)
+                # Filtrar
                 ecos_disponibles = sorted(df["ECO"].unique())
                 selected_eco = st.multiselect("Seleccione ECO:", ecos_disponibles)
                 df_filtrado = df.copy()
                 if selected_eco:
                     df_filtrado = df_filtrado[df_filtrado["ECO"].isin(selected_eco)]
-
                 disciplinas_disponibles = sorted(df_filtrado["DISCIPLINA"].unique())
                 selected_disc = st.multiselect("Seleccione DISCIPLINA:", disciplinas_disponibles)
                 if selected_disc:
                     df_filtrado = df_filtrado[df_filtrado["DISCIPLINA"].isin(selected_disc)]
-
                 st.write("Resultado del filtrado:")
                 st.dataframe(df_filtrado)
-
                 if st.button("Agregar Filtrados"):
                     codes_to_add = df_filtrado["N° ENTREGABLE SQM"].apply(lambda x: x.strip()).unique().tolist()
                     st.session_state["documento_codes"].extend(codes_to_add)
@@ -269,7 +264,6 @@ def main():
     else:
         st.write("No hay códigos agregados todavía.")
 
-    # Datos generales para el registro
     st.header("Datos Generales para el Registro")
     carpeta = st.text_input("Carpeta:")
     codigo_documento = st.text_input("Código del Documento (N° ENTREGABLE SQM): (Opcional)")
@@ -302,10 +296,8 @@ def main():
                 rev = plano_data.get("rev", "")
             else:
                 eco = tipo_doc = descripcion = disciplina = rev = ""
-
             item_value, new_row = get_item_and_next_row(ws_doc_entregados, start_row=29)
             cc_val = str(trabajador.get("CC CORRELATIVO ASIGNADO", "")).strip()
-
             row_data = [
                 "",
                 item_value,
@@ -332,7 +324,6 @@ def main():
                     copy_format(ws_doc_entregados, source_row, new_row, start_col=1, end_col=17)
             except Exception as e:
                 errores.append(f"{codigo}: {e}")
-
         if errores:
             st.error("Errores al guardar:\n" + "\n".join(errores))
         else:
